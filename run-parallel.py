@@ -16,7 +16,7 @@ EOS_PATH = "/Users/krmt/Desktop/pyTOV-STT/eos_cgs.txt"
 
 # Requested sets
 BETAS = [-6.0, -10.0]  # (you removed -4.5)
-MPHIS = [0.0, 1e-3, 5e-3, 2e-2, 5e-2]
+MPHIS = [0.0, 1e-3, 5e-3]
 
 RUN_CFG = dict(
     n_points=60,
@@ -32,8 +32,8 @@ RUN_CFG = dict(
 
 # Plot styling (beta color, mphi linestyle)
 BETA_COLOR = {-6.0: "blue", -10.0: "green"}
-MPHI_STYLE = {0.0: "-", 1e-3: "--", 5e-3: ":", 2e-2: "-."}
-MPHI_CUSTOM_DASHES = {5e-2: (0, (6, 2, 1.2, 2, 1.2, 2))}  # dash-dot-dot
+MPHI_STYLE = {0.0: "-", 1e-3: "--", 5e-3: ":"}
+MPHI_CUSTOM_DASHES = {}  # dash-dot-dot
 
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
@@ -146,7 +146,7 @@ def f_int(r, y, beta, mphi):
     )
 
     mass_term = - (r/(r_minus_2m)) * (mphi**2) * phi
-    dpsidr = dpsidr_massless + mass_term
+    dpsidr = dpsidr_massless - mass_term
 
     return [dPdr, dmdr, dnudr, dphidr, dpsidr]
 
@@ -170,7 +170,7 @@ def f_ext(r, y, beta, mphi):
 
     dpsidr_massless = -2.0*(r-m)*psi/(r*(r-2.0*m))
     mass_term = - (r/(r_minus_2m))*(mphi**2)*phi
-    dpsidr = dpsidr_massless + mass_term
+    dpsidr = dpsidr_massless - mass_term
 
     return [dPdr, dmdr, dnudr, dphidr, dpsidr]
 
@@ -403,11 +403,7 @@ if __name__ == "__main__":
         mlines.Line2D([], [], color="black", lw=2.5, ls="-",  label=r"$m_\varphi=0$"),
         mlines.Line2D([], [], color="black", lw=2.5, ls="--", label=r"$m_\varphi=10^{-3}$"),
         mlines.Line2D([], [], color="black", lw=2.5, ls=":",  label=r"$m_\varphi=5\times10^{-3}$"),
-        mlines.Line2D([], [], color="black", lw=2.5, ls="-.", label=r"$m_\varphi=2\times10^{-2}$"),
     ]
-    h = mlines.Line2D([], [], color="black", lw=2.5, label=r"$m_\varphi=5\times10^{-2}$")
-    h.set_dashes(MPHI_CUSTOM_DASHES[5e-2][1])
-    mphi_handles.append(h)
 
     plt.legend(handles=mphi_handles, title=r"$m_\varphi$", loc="lower left")
     plt.show()

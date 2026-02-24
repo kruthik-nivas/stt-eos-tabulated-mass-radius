@@ -12,11 +12,16 @@ import matplotlib.lines as mlines
 # -----------------------------
 # Config
 # -----------------------------
-EOS_PATH = "/Users/krmt/Desktop/pyTOV-STT/eos_cgs.txt"
+EOS_PATH = "/Users/krmt/Desktop/stt-eos-tabulated-mass-radius/eos_cgs.txt"
+SAVE_DIR = "/Users/krmt/Desktop/stt-eos-tabulated-mass-radius/summary_table_files"
+
+# Ensure the directory exists
+if not os.path.exists(SAVE_DIR):
+    os.makedirs(SAVE_DIR)
 
 # Requested sets
 BETAS = [-6.0, -10.0]  # (you removed -4.5)
-MPHIS = [0.0, 1e-3, 5e-3]
+MPHIS = [0.0, 1e-3, 5e-3, 2e-2]
 
 RUN_CFG = dict(
     n_points=60,
@@ -32,7 +37,7 @@ RUN_CFG = dict(
 
 # Plot styling (beta color, mphi linestyle)
 BETA_COLOR = {-6.0: "blue", -10.0: "green"}
-MPHI_STYLE = {0.0: "-", 1e-3: "--", 5e-3: ":"}
+MPHI_STYLE = {0.0: "-", 1e-3: "--", 5e-3: ":", 2e-2: "-."}
 MPHI_CUSTOM_DASHES = {}  # dash-dot-dot
 
 if not sys.warnoptions:
@@ -287,7 +292,12 @@ def MR_curve_one_combo_shooting(beta, mphi,
     )
 
     M_list, R_list = [], []
+    table_data = [] # To store the 6 columns for the summary file
     nu_guess = float(init_params[0])
+
+    # Constants for conversions
+    rho_to_nbar = (1.0 / cgs_to_geom) / (1.660539e-24) * 1e-39 * 10
+    rho_nuc_geom = 2.7e14 * cgs_to_geom 
 
     for i, eps_c in enumerate(eps_c_list):
         P_c = P_of_eps(eps_c)
@@ -305,17 +315,23 @@ def MR_curve_one_combo_shooting(beta, mphi,
                     initial_params=(nu_guess, float(phi0)),
                     maxiter=maxiter
                 )
+                
+                # --- THE SANITY FILTER ---
+                # This ignores the "absurd" solutions (negative mass, tiny radius, exploding field)
+                if M <= 0.0 or R_km < 5.0 or abs(sol['phi_inf']) > 1e-2:
+                    continue
+                # -------------------------
+
+                if abs(sol["phi_c"]) < phi_min:
+                    continue
+
+                accepted += 1
+                score = abs(sol["phi_inf"])
+
+                if (best is None) or (score < best[0]):
+                    best = (score, M, R_km, sol)
             except Exception:
                 continue
-
-            if abs(sol["phi_c"]) < phi_min:
-                continue
-
-            accepted += 1
-            score = abs(sol["phi_inf"])
-
-            if (best is None) or (score < best[0]):
-                best = (score, M, R_km, sol)
 
         if best is None:
             print(f"[{i+1:03d}/{len(eps_c_list)}] beta={beta}, mphi={mphi} eps_c={eps_c:.3e} -> "
@@ -327,24 +343,33 @@ def MR_curve_one_combo_shooting(beta, mphi,
 
         M_list.append(M)
         R_list.append(R_km)
+        
+        # Prepare row for summary table
+        phi_c = sol['phi_c']
+        n_bar_c = rho_of_P(P_c) * rho_to_nbar
+        eps_c_norm = eps_c / rho_nuc_geom
+        alpha_c = alpha_of_phi(phi_c, beta)
+        table_data.append([R_km, P_c, n_bar_c, eps_c_norm, phi_c, alpha_c])
+        print(f">> TABLE VALUES: beta={beta}, mphi={mphi} R={R_km:.2f}, P_c={P_c:.3e}, n_bar_c={n_bar_c:.3f}, eps_c_norm={eps_c_norm:.3f}, phi_c={phi_c:.3e}, alpha={alpha_c:.3e}")
 
         print(f"[{i+1:03d}/{len(eps_c_list)}] beta={beta}, mphi={mphi} eps_c={eps_c:.3e} -> "
               f"M={M:.3f} Msun, R={R_km:.2f} km, phi_c={sol['phi_c']:.3e}, |phi_inf|={abs(sol['phi_inf']):.3e} "
               f"(accepted {accepted}/{tried})")
 
-    return np.array(M_list), np.array(R_list)
+    return np.array(M_list), np.array(R_list), np.array(table_data)
 
 # -----------------------------
 # Multiprocess driver
 # -----------------------------
 def _run_one_combo_process(args):
     beta, mphi, run_cfg = args
-    M, R = MR_curve_one_combo_shooting(beta=beta, mphi=mphi, **run_cfg)
-    return beta, mphi, M, R
+    M, R, table_data = MR_curve_one_combo_shooting(beta=beta, mphi=mphi, **run_cfg)
+    return beta, mphi, M, R, table_data
 
 def run_all_curves_processes(betas, mphis, run_cfg, max_workers=None):
     combos = [(b, m, run_cfg) for b in betas for m in mphis]
     curves = {}
+    tables = {}
 
     if max_workers is None:
         cpu = os.cpu_count() or 4
@@ -355,11 +380,12 @@ def run_all_curves_processes(betas, mphis, run_cfg, max_workers=None):
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
         futs = [ex.submit(_run_one_combo_process, x) for x in combos]
         for fut in as_completed(futs):
-            beta, mphi, M, R = fut.result()
+            beta, mphi, M, R, table_data = fut.result()
             curves[(beta, mphi)] = (M, R)
+            tables[(beta, mphi)] = table_data
             print(f"DONE beta={beta}, mphi={mphi}, points={len(M)}")
 
-    return curves
+    return curves, tables
 
 # -----------------------------
 # Main
@@ -369,7 +395,16 @@ if __name__ == "__main__":
     print("Length_km:", Length_km)
     print("EOS points:", len(P_unique))
 
-    curves = run_all_curves_processes(BETAS, MPHIS, RUN_CFG, max_workers=None)
+    curves, tables = run_all_curves_processes(BETAS, MPHIS, RUN_CFG, max_workers=None)
+
+    # ---- Save Summary Files ----
+    header = "Radius[km]    p_c    (n_bar)_c[x0.1 fm^-3]    eps_c[rho_nuc c^2]    phi_c    alpha"
+    for (beta, mphi), table_data in tables.items():
+        if len(table_data) > 0:
+            filename = f"summary_table_for_{beta}_and_{mphi}.txt"
+            filepath = os.path.join(SAVE_DIR, filename)
+            np.savetxt(filepath, table_data, header=header, fmt='%1.10e')
+            print(f"Saved: {filename}")
 
     # ---- Plot (main process only) ----
     plt.figure(figsize=(9, 7))
@@ -403,6 +438,7 @@ if __name__ == "__main__":
         mlines.Line2D([], [], color="black", lw=2.5, ls="-",  label=r"$m_\varphi=0$"),
         mlines.Line2D([], [], color="black", lw=2.5, ls="--", label=r"$m_\varphi=10^{-3}$"),
         mlines.Line2D([], [], color="black", lw=2.5, ls=":",  label=r"$m_\varphi=5\times10^{-3}$"),
+        mlines.Line2D([], [], color="black", lw=2.5, ls="-.", label=r"$m_\varphi=2\times10^{-2}$"),
     ]
 
     plt.legend(handles=mphi_handles, title=r"$m_\varphi$", loc="lower left")
